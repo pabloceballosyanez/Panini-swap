@@ -364,7 +364,7 @@ app.get('/api/stats', async (req, res) => {
 //  ADMIN
 // ═══════════════════════════════════════════════════════════════
 
-app.post('/api/admin/reset', async (req, res) => {
+app.get('/api/admin/reset', async (req, res) => {
   const db = await getDb();
   
   // Keep stickers, wipe users and inventory
@@ -373,11 +373,8 @@ app.post('/api/admin/reset', async (req, res) => {
   run(db, 'DELETE FROM users');
   saveDb();
   
-  const users = query(db, 'SELECT COUNT(*) FROM users')[0][0];
-  const inv = query(db, 'SELECT COUNT(*) FROM inventory')[0][0];
-  
-  console.log(`🗑️ DB reset — ${users} users, ${inv} inventory items`);
-  res.json({ ok: true, message: 'Database wiped. Users and inventory cleared. Stickers preserved.' });
+  console.log('🗑️ DB reset complete');
+  res.json({ ok: true, message: 'Database wiped. Ready for real trading!' });
 });
 
 // ═══════════════════════════════════════════════════════════════
