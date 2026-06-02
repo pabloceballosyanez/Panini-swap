@@ -12,7 +12,8 @@ const PORT = process.env.PORT || 3456;
 const API_KEY = process.env.PANINI_API_KEY || 'panini-swap-2026-secret';
 const TELEGRAM_TOKEN = process.env.PANINI_TELEGRAM_TOKEN;
 const APP_URL = process.env.PANINI_APP_URL || `http://localhost:${PORT}`;
-const TELEGRAM_SECRET = TELEGRAM_TOKEN;
+// Telegram secret_token must only contain A-Z, a-z, 0-9, _ and -
+const TELEGRAM_SECRET = TELEGRAM_TOKEN ? `ps_${TELEGRAM_TOKEN.replace(/[^A-Za-z0-9_-]/g,'').slice(0,24)}` : '';
 
 // ── Rate Limiter ──────────────────────────────────────────────
 const rateLimitMap = {};
@@ -495,7 +496,16 @@ app.post('/api/telegram/webhook', async (req, res) => {
 //  STARTUP
 // ═══════════════════════════════════════════════════════════════
 
-initSchema().then(() => {
+initSchema().then(async () => {
+  // Auto-seed if stickers table is empty (first deploy)
+  const db = await getDb();
+  const stickerCount = query(db, 'SELECT COUNT(*) FROM stickers');
+  if (stickerCount[0]?.[0] === 0) {
+    console.log('🌱 First run — seeding 980 stickers...');
+    const { seed } = await import('./seed.js');
+    await seed();
+  }
+  
   app.listen(PORT, () => {
     console.log(`🔄 Panini Swap API → http://localhost:${PORT}`);
     console.log(`🔑 API Key auth: ${API_KEY ? 'enabled' : 'DISABLED ⚠️'}`);

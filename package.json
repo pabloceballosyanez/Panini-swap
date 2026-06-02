@@ -4,6 +4,7 @@
   "description": "App de intercambio de figuritas Panini Mundial 2026",
   "type": "module",
   "scripts": {
+    "start": "node src/server.js",
     "dev": "node src/server.js",
     "seed": "node src/seed.js",
     "test": "node src/test.js"

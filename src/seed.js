@@ -168,5 +168,7 @@ export async function seed() {
   console.log(`✅ Seeded ${count} stickers into database.`);
 }
 
-// Run directly
-seed().catch(console.error);
+// Run directly if called as main script
+if (process.argv[1]?.includes('seed.js')) {
+  seed().catch(console.error);
+}

@@ -1,7 +1,7 @@
 import initSqlJs from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 
-const DB_PATH = 'data/panini-swap.db';
+const DB_PATH = process.env.PANINI_DB_PATH || 'data/panini-swap.db';
 
 let db = null;
 
