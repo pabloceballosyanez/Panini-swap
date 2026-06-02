@@ -45,8 +45,14 @@ export async function handleMessage(contactId, name, channel, text) {
   
   const userName = query(db, `SELECT name FROM users WHERE id=?`, [userId])[0]?.[0] || name;
   
+  // ── Try bulk format first (multi-line team lists) ──
+  const bulk = parseBulkMessage(text);
+  if (bulk && (bulk.owned.length + bulk.needed.length + bulk.duplicate.length > 0)) {
+    response = await setBulkInventory(db, userId, userName, bulk);
+    wasInventoryChange = true;
+  }
   // Parse intent
-  if (msg.match(/^(ayuda|help|comandos|que puedes hacer)/)) {
+  else if (msg.match(/^(ayuda|help|comandos|que puedes hacer)/)) {
     response = helpMessage();
   } else if (msg.match(/^(me llamo|soy|registrarme|registrame)/)) {
     const newName = text.replace(/^(me llamo|soy|registrarme|registrame)\s*/i, '').trim() || name;
@@ -98,6 +104,165 @@ export async function handleMessage(contactId, name, channel, text) {
 function extractCodes(text) {
   const matches = text.toUpperCase().match(/[A-Z]{2,4}\d{1,2}|FW\d{1,2}|FWC\d{1,2}/g);
   return matches || [];
+}
+
+/**
+ * Detect and parse bulk message format:
+ * 
+ * I need / Necesito / Faltan
+ * MEX 🇲🇽: 8, 20
+ * ARG 🇦🇷: 3, 4, 17
+ * 
+ * Swaps / Repetidas / Tengo para cambiar
+ * BRA 🇧🇷: 9, 15
+ * 
+ * Tengo / Have
+ * USA 🇺🇸: 2, 7
+ * 
+ * Returns { owned: [], needed: [], duplicate: [] } or null if not bulk format.
+ */
+function parseBulkMessage(text) {
+  const lines = text.split('\n');
+  let currentStatus = null;
+  const result = { owned: [], needed: [], duplicate: [] };
+  let teamLinesFound = 0;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    
+    const lower = trimmed.toLowerCase();
+    
+    // Detect section headers
+    if (/^(need|necesito|faltan|faltantes|me faltan|i need|busco)\b/i.test(lower)) {
+      currentStatus = 'needed';
+      continue;
+    }
+    if (/^(swaps?|repetid[oa]s?|duplicad[oa]s?|para cambiar|tengo para cambiar|dupes?|swap|cambio|cambiar|intercambio)\b/i.test(lower)) {
+      currentStatus = 'duplicate';
+      continue;
+    }
+    if (/^(tengo|have|ya tengo|pegadas|owned|tengo estas|colecci[oó]n|album|[áa]lbum|mi [áa]lbum)\b/i.test(lower)) {
+      currentStatus = 'owned';
+      continue;
+    }
+    
+    // Parse team-number line
+    if (currentStatus) {
+      const codes = parseTeamLine(trimmed);
+      if (codes.length > 0) {
+        teamLinesFound++;
+        result[currentStatus].push(...codes);
+      }
+    }
+  }
+  
+  // Only return bulk result if we found at least 2 team lines
+  // (to avoid false positives on single-line messages)
+  if (teamLinesFound >= 2) return result;
+  return null;
+}
+
+/**
+ * Parse a line like "MEX 🇲🇽: 8, 20" → ["MEX8", "MEX20"]
+ * Also handles: "FWC 🏆: 00, 3" → ["FWC00", "FWC3"]
+ *              "ARG: 1 2 3" → ["ARG1", "ARG2", "ARG3"]
+ *              "BRA - 10, 20" → ["BRA10", "BRA20"]
+ */
+function parseTeamLine(line) {
+  // Match: TEAM_CODE (2-4 letters) followed by optional emoji/flag, then separator, then numbers
+  // Separator can be : or - or just whitespace
+  // Numbers can be separated by , or spaces or both
+  const match = line.match(/^([A-Z]{2,4})\s*(?:[^\d,:;\-]+)?\s*[:;\-]?\s*(.+)$/i);
+  if (!match) return [];
+  
+  const teamCode = match[1].toUpperCase();
+  const numbersStr = match[2];
+  
+  // Extract all numbers (1-2 digits)
+  const numbers = numbersStr.match(/\d{1,2}/g);
+  if (!numbers) return [];
+  
+  return numbers.map(n => `${teamCode}${n}`);
+}
+
+/**
+ * Process a bulk inventory update across all three statuses.
+ */
+async function setBulkInventory(db, userId, userName, bulk) {
+  const responses = [];
+  let totalFound = 0;
+  let totalNotFound = 0;
+  const allNotFound = [];
+  
+  const statusConfig = [
+    { key: 'owned', label: 'Tienes' },
+    { key: 'duplicate', label: 'Repetidas' },
+    { key: 'needed', label: 'Necesitas' }
+  ];
+  
+  for (const { key, label } of statusConfig) {
+    const codes = bulk[key];
+    if (codes.length === 0) continue;
+    
+    const found = [];
+    const notFound = [];
+    
+    for (const code of codes) {
+      const rows = query(db, 
+        `SELECT id, name, team_name, rarity FROM stickers WHERE code=?`,
+        [code]
+      );
+      
+      if (rows.length > 0) {
+        const [id, stickerName, team, rarity] = rows[0];
+        found.push({ code, name: stickerName, team, rarity });
+        
+        run(db,
+          `INSERT INTO inventory (user_id, sticker_id, status, quantity) 
+           VALUES (?,?,?,1)
+           ON CONFLICT(user_id, sticker_id) DO UPDATE SET status=excluded.status, updated_at=datetime('now')`,
+          [userId, id, key]
+        );
+      } else {
+        notFound.push(code);
+      }
+    }
+    
+    totalFound += found.length;
+    totalNotFound += notFound.length;
+    allNotFound.push(...notFound);
+    
+    if (found.length > 0) {
+      // Group by team
+      const byTeam = {};
+      for (const f of found) {
+        const t = f.team || 'Especiales';
+        if (!byTeam[t]) byTeam[t] = [];
+        byTeam[t].push(`${f.code} ${f.name}${f.rarity === 'foil' ? ' ✨' : ''}`);
+      }
+      
+      let section = `📋 **${label}** ${found.length} figurita(s):\n`;
+      for (const [team, stickers] of Object.entries(byTeam)) {
+        section += `  🏆 ${team}: ${stickers.map(s => s.split(' ')[0]).join(', ')}\n`;
+      }
+      responses.push(section);
+    }
+  }
+  
+  saveDb();
+  
+  let response = `✅ ¡Procesado, ${userName}! 🌸\n\n`;
+  response += `📊 ${totalFound} figuritas registradas\n`;
+  if (responses.length > 0) {
+    response += responses.join('\n');
+  }
+  if (allNotFound.length > 0) {
+    response += `\n⚠️ No reconocí: ${allNotFound.join(', ')}\n`;
+    response += `💡 Los códigos son como: ARG1, MEX5, FWC16, FW1`;
+  }
+  
+  return response;
 }
 
 async function setInventory(db, userId, codes, status) {
