@@ -1,0 +1,15 @@
+{
+  "name": "panini-swap",
+  "version": "1.0.0",
+  "description": "App de intercambio de figuritas Panini Mundial 2026",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "seed": "node src/seed.js",
+    "test": "node src/test.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "sql.js": "^1.12.0"
+  }
+}

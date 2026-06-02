@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panini Swap - Mundial 2026</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+    header { text-align: center; padding: 40px 0 20px; }
+    header h1 { font-size: 2.5em; background: linear-gradient(135deg, #fbbf24, #ef4444, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    header p { color: #94a3b8; margin-top: 8px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 24px; margin-bottom: 20px; border: 1px solid #334155; }
+    .card h2 { font-size: 1.3em; margin-bottom: 16px; color: #fbbf24; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+    .stat { background: #0f172a; padding: 16px; border-radius: 8px; text-align: center; }
+    .stat .number { font-size: 2em; font-weight: bold; color: #3b82f6; }
+    .stat .label { color: #94a3b8; font-size: 0.85em; margin-top: 4px; }
+    .match { background: #0f172a; padding: 16px; border-radius: 8px; margin-bottom: 12px; border-left: 3px solid #3b82f6; }
+    .match.cycle { border-left-color: #fbbf24; }
+    .match .users { font-size: 1.1em; font-weight: bold; margin-bottom: 8px; }
+    .match .arrow { color: #fbbf24; }
+    .match .gives { margin: 4px 0; padding-left: 16px; color: #94a3b8; font-size: 0.9em; }
+    .match .gives span { color: #34d399; }
+    .match .score { float: right; background: #3b82f6; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; }
+    .cycle-path { color: #fbbf24; font-weight: bold; margin-bottom: 8px; }
+    button { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 1em; }
+    button:hover { background: #2563eb; }
+    .empty { text-align: center; color: #64748b; padding: 20px; }
+    .loading { text-align: center; padding: 20px; }
+    .error { color: #ef4444; background: #450a0a; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>⚽ Panini Swap</h1>
+      <p>Intercambio inteligente de figuritas • Mundial 2026 • 980 stickers • 48 equipos</p>
+    </header>
+
+    <div class="card">
+      <h2>📊 Estadísticas</h2>
+      <div class="stats" id="stats">Cargando...</div>
+    </div>
+
+    <div class="card">
+      <h2>👥 Coleccionistas</h2>
+      <div id="users">Cargando...</div>
+    </div>
+
+    <div class="card">
+      <h2>🧠 Matches de Einstein</h2>
+      <div style="margin-bottom: 12px;">
+        <button onclick="loadMatches()">🔄 Recalcular matches</button>
+      </div>
+      <div id="matches">Presiona el botón para calcular</div>
+    </div>
+  </div>
+
+  <script>
+    const API = '/api';
+
+    async function loadStats() {
+      try {
+        const r = await fetch(`${API}/stats`);
+        const d = await r.json();
+        document.getElementById('stats').innerHTML = `
+          <div class="stat"><div class="number">${d.total_users}</div><div class="label">Coleccionistas</div></div>
+          <div class="stat"><div class="number">${d.total_stickers}</div><div class="label">Figuritas totales</div></div>
+          <div class="stat"><div class="number">${d.total_inventory}</div><div class="label">Registros</div></div>
+        `;
+      } catch(e) {
+        document.getElementById('stats').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+      }
+    }
+
+    async function loadUsers() {
+      try {
+        const r = await fetch(`${API}/users`);
+        const users = await r.json();
+        if (!users.length) {
+          document.getElementById('users').innerHTML = '<div class="empty">No hay coleccionistas registrados. ¡Sé el primero!</div>';
+          return;
+        }
+        document.getElementById('users').innerHTML = users.map(u => `
+          <div class="match">
+            <strong>${u.name}</strong> 
+            <span style="color:#94a3b8;font-size:0.85em;">${u.channel} • ${u.location||'Sin ubicación'}</span>
+            <div style="margin-top:4px;font-size:0.9em;">
+              ✅ ${u.owned} | 📦 ${u.duplicates} | 🔍 ${u.needed}
+              (${((u.owned/(u.owned+u.needed||1))*100).toFixed(0)}% completado)
+            </div>
+          </div>
+        `).join('');
+      } catch(e) {
+        document.getElementById('users').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+      }
+    }
+
+    async function loadMatches() {
+      document.getElementById('matches').innerHTML = '<div class="loading">🧠 Einstein está pensando...</div>';
+      try {
+        const r = await fetch(`${API}/matches`);
+        const d = await r.json();
+        
+        let html = `<div style="margin-bottom:8px;color:#94a3b8;">
+          ${d.summary.total_direct_matches} matches directos • 
+          ${d.summary.total_cycles} ciclos • 
+          ${d.summary.total_stickers_exchanged} stickers a intercambiar
+        </div>`;
+        
+        if (d.direct_matches.length === 0 && d.cycles.length === 0) {
+          html += '<div class="empty">No hay matches posibles aún. Registren más figuritas.</div>';
+        }
+        
+        for (const m of d.direct_matches.slice(0, 20)) {
+          html += `<div class="match">
+            <span class="score">Score: ${m.score.toFixed(1)}</span>
+            <div class="users">${m.user_a_name} <span class="arrow">↔</span> ${m.user_b_name}</div>`;
+          
+          if (m.a_gives_details?.length) {
+            html += `<div class="gives">${m.user_a_name} entrega: <span>${m.a_gives_details.map(s => `${s.code} ${s.name} (${s.team})`).join(', ')}</span></div>`;
+          }
+          if (m.b_gives_details?.length) {
+            html += `<div class="gives">${m.user_b_name} entrega: <span>${m.b_gives_details.map(s => `${s.code} ${s.name} (${s.team})`).join(', ')}</span></div>`;
+          }
+          html += '</div>';
+        }
+        
+        for (const c of d.cycles.slice(0, 5)) {
+          html += `<div class="match cycle">
+            <span class="score">Ciclo ×${c.users.length}</span>
+            <div class="cycle-path">🔄 ${c.user_names.join(' → ')} → ${c.user_names[0]}</div>`;
+          for (const det of c.details) {
+            html += `<div class="gives">${det.from_name} da <span>${det.sticker?.code} ${det.sticker?.name} (${det.sticker?.team})</span> a ${det.to_name}</div>`;
+          }
+          html += '</div>';
+        }
+        
+        document.getElementById('matches').innerHTML = html;
+      } catch(e) {
+        document.getElementById('matches').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+      }
+    }
+
+    loadStats();
+    loadUsers();
+    loadMatches();
+  </script>
+</body>
+</html>
