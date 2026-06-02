@@ -14,5 +14,8 @@ const name = args[1];
 const channel = args[2];
 const message = args.slice(3).join(' ');
 
-const response = await handleMessage(contactId, name, channel, message);
-console.log(response);
+const result = await handleMessage(contactId, name, channel, message);
+console.log(result.reply || result);
+if (result.notifications?.length) {
+  console.log(`\n🔔 ${result.notifications.length} notification(s) would be sent to counterparties.`);
+}

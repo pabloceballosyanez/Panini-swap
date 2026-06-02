@@ -2,27 +2,23 @@
  * Panini Swap Bot — Integration module
  * 
  * Handles natural language commands from Telegram/WhatsApp.
- * 
- * Commands understood:
- * - "me llamo X" / "soy X" → register
- * - "tengo ARG1, MEX5" → mark as owned
- * - "repetida BRA3, GER7" → mark as duplicate  
- * - "necesito MEX10, ARG15" → mark as needed
- * - "cambiar?" / "matches" / "intercambios" → show matches
- * - "mi album" / "mi progreso" → show progress
- * - "equipos" / "selecciones" → list teams
- * - "buscar MEX" or "buscar Messi" → search stickers
- * - "ayuda" → show help
+ * Returns { reply, notifications } where notifications are 
+ * messages to send to counterparties when new matches are found.
  */
 
 import { getDb, saveDb, initSchema, query, run } from './db.js';
 import { findMatches } from './einstein.js';
 
+/**
+ * @returns {{ reply: string, notifications: Array<{chatId: string, message: string}> }}
+ */
 export async function handleMessage(contactId, name, channel, text) {
   await initSchema();
   const db = await getDb();
   
   const msg = text.toLowerCase().trim();
+  let response = '';
+  let wasInventoryChange = false;
   
   // Register or find user
   let rows = query(db, 
@@ -40,63 +36,66 @@ export async function handleMessage(contactId, name, channel, text) {
     userId = result.lastInsertRowid;
   } else {
     userId = rows[0][0];
+    // Update name silently
+    if (name && name !== 'Coleccionista' && rows[0][1] !== name) {
+      run(db, `UPDATE users SET name=? WHERE id=?`, [name, userId]);
+      saveDb();
+    }
   }
+  
+  const userName = query(db, `SELECT name FROM users WHERE id=?`, [userId])[0]?.[0] || name;
   
   // Parse intent
   if (msg.match(/^(ayuda|help|comandos|que puedes hacer)/)) {
-    return helpMessage();
-  }
-  
-  if (msg.match(/^(me llamo|soy|registrarme|registrame)/)) {
+    response = helpMessage();
+  } else if (msg.match(/^(me llamo|soy|registrarme|registrame)/)) {
     const newName = text.replace(/^(me llamo|soy|registrarme|registrame)\s*/i, '').trim() || name;
     run(db, `UPDATE users SET name=? WHERE id=?`, [newName, userId]);
     saveDb();
-    return `✅ ¡Registrado, ${newName}! 🌸\n\nTu ID de coleccionista: #${userId}\n\nAhora dime qué figuritas tienes. Por ejemplo:\n• "tengo ARG1, ARG2, MEX5"\n• "repetida BRA3, GER7"\n• "necesito MEX10, MEX15"\n\nO dime "ayuda" para ver todos los comandos.`;
-  }
-  
-  if (msg.match(/^(equipos|selecciones|grupos)/)) {
-    return await showTeams(db);
-  }
-  
-  if (msg.match(/^buscar\s/)) {
+    response = `✅ ¡Registrado, ${newName}! 🌸\n\nTu ID de coleccionista: #${userId}\n\nAhora dime qué figuritas tienes. Por ejemplo:\n• "tengo ARG1, ARG2, MEX5"\n• "repetida BRA3, GER7"\n• "necesito MEX10, MEX15"\n\nO dime "ayuda" para ver todos los comandos.`;
+  } else if (msg.match(/^(equipos|selecciones|grupos)/)) {
+    response = await showTeams(db);
+  } else if (msg.match(/^buscar\s/)) {
     const searchQuery = text.replace(/^buscar\s*/i, '').trim();
-    return await searchStickers(db, searchQuery);
-  }
-  
-  if (msg.match(/^(tengo|tengo estas|tengo las?|tengo los?)\s/)) {
+    response = await searchStickers(db, searchQuery);
+  } else if (msg.match(/^(tengo|tengo estas|tengo las?|tengo los?)\s/)) {
     const codes = extractCodes(text);
-    return await setInventory(db, userId, codes, 'owned');
-  }
-  
-  if (msg.match(/^(repetida|repetidas|repetido|repetidos|duplicada|duplicadas|dupes?)\s/)) {
+    response = await setInventory(db, userId, codes, 'owned');
+    wasInventoryChange = true;
+  } else if (msg.match(/^(repetida|repetidas|repetido|repetidos|duplicada|duplicadas|dupes?)\s/)) {
     const codes = extractCodes(text);
-    return await setInventory(db, userId, codes, 'duplicate');
-  }
-  
-  if (msg.match(/^(necesito|me faltan?|me falta|busco)\s/)) {
+    response = await setInventory(db, userId, codes, 'duplicate');
+    wasInventoryChange = true;
+  } else if (msg.match(/^(necesito|me faltan?|me falta|busco)\s/)) {
     const codes = extractCodes(text);
-    return await setInventory(db, userId, codes, 'needed');
+    response = await setInventory(db, userId, codes, 'needed');
+    wasInventoryChange = true;
+  } else if (msg.match(/^(cambiar|matches|intercambios?|con quien|cambio|swap)/)) {
+    response = await showMatches(db, userId);
+  } else if (msg.match(/^(mi album|mi progreso|mi coleccion|mi colección|progreso|resumen)/)) {
+    response = await showProgress(db, userId);
+  } else {
+    // Default: try to interpret as sticker codes
+    const codes = extractCodes(text);
+    if (codes.length > 0) {
+      response = `🤔 No entiendo si "${text}" son figuritas que tienes, repetidas, o necesitas.\n\nPrueba:\n• "tengo ${codes.slice(0,3).join(', ')}"\n• "repetida ${codes.slice(0,3).join(', ')}"\n• "necesito ${codes.slice(0,3).join(', ')}"\n\nO dime "ayuda" para ver qué puedo hacer.`;
+    } else {
+      response = `🌸 ¡Hola! Soy Flor, tu asistente de intercambio de figuritas del Mundial 2026.\n\nPuedes decirme:\n• "tengo" + códigos → figuritas que ya tienes\n• "repetida" + códigos → las que tienes de más\n• "necesito" + códigos → las que te faltan\n• "cambiar?" → ver con quién intercambiar\n• "mi álbum" → ver tu progreso\n• "buscar Messi" → buscar figuritas\n• "equipos" → ver selecciones\n\nO dime "ayuda" para el menú completo.`;
+    }
   }
   
-  if (msg.match(/^(cambiar|matches|intercambios?|con quien|cambio|swap)/)) {
-    return await showMatches(db, userId);
+  // ── Auto-matchmaking after inventory changes ──
+  let notifications = [];
+  if (wasInventoryChange) {
+    const alert = await getAutoMatchAlert(db, userId, userName);
+    if (alert.replySuffix) response += alert.replySuffix;
+    notifications = alert.notifications;
   }
   
-  if (msg.match(/^(mi album|mi progreso|mi coleccion|mi colección|progreso|resumen)/)) {
-    return await showProgress(db, userId);
-  }
-  
-  // Default: try to interpret as sticker codes
-  const codes = extractCodes(text);
-  if (codes.length > 0) {
-    return `🤔 No entiendo si "${text}" son figuritas que tienes, repetidas, o necesitas.\n\nPrueba:\n• "tengo ${codes.slice(0,3).join(', ')}"\n• "repetida ${codes.slice(0,3).join(', ')}"\n• "necesito ${codes.slice(0,3).join(', ')}"\n\nO dime "ayuda" para ver qué puedo hacer.`;
-  }
-  
-  return `🌸 ¡Hola! Soy Flor, tu asistente de intercambio de figuritas del Mundial 2026.\n\nPuedes decirme:\n• "tengo" + códigos → figuritas que ya tienes\n• "repetida" + códigos → las que tienes de más\n• "necesito" + códigos → las que te faltan\n• "cambiar?" → ver con quién intercambiar\n• "mi álbum" → ver tu progreso\n• "buscar Messi" → buscar figuritas\n• "equipos" → ver selecciones\n\nO dime "ayuda" para el menú completo.`;
+  return { reply: response, notifications };
 }
 
 function extractCodes(text) {
-  // Match codes like: ARG1, MEX15, BRA20, FW1, FWC10
   const matches = text.toUpperCase().match(/[A-Z]{2,4}\d{1,2}|FW\d{1,2}|FWC\d{1,2}/g);
   return matches || [];
 }
@@ -155,6 +154,72 @@ async function setInventory(db, userId, codes, status) {
   return response;
 }
 
+/**
+ * After inventory changes, run Einstein and return:
+ * - replySuffix: match summary to append to user's reply
+ * - notifications: messages to send to counterparties' Telegram
+ */
+async function getAutoMatchAlert(db, userId, userName) {
+  const { direct, cycles } = findMatches(db);
+  
+  const myDirect = direct.filter(m => m.user_a_id === userId || m.user_b_id === userId);
+  const myCycles = cycles.filter(c => c.users.includes(userId));
+  const total = myDirect.length + myCycles.length;
+  
+  let replySuffix = '';
+  if (total > 0) {
+    replySuffix = `\n\n🧠 **Einstein encontró ${total} posible(s) intercambio(s).**\nDi "cambiar?" para ver los detalles.`;
+  }
+  
+  // ── Build notifications for counterparties ──
+  const notifications = [];
+  const notifiedUsers = new Set();
+  
+  // Get sticker names
+  const stickerNames = {};
+  const allStickers = query(db, 'SELECT id, code, name, team_name FROM stickers');
+  for (const [id, code, name, team] of allStickers) {
+    stickerNames[id] = { code, name, team };
+  }
+  
+  for (const m of myDirect.slice(0, 5)) {
+    const otherId = m.user_a_id === userId ? m.user_b_id : m.user_a_id;
+    if (notifiedUsers.has(otherId)) continue;
+    notifiedUsers.add(otherId);
+    
+    const otherName = m.user_a_id === userId ? m.user_b_name : m.user_a_name;
+    const otherUser = query(db, 'SELECT channel, contact_id FROM users WHERE id=?', [otherId]);
+    
+    if (otherUser.length > 0 && otherUser[0][0] === 'telegram') {
+      // What this other user would give/get
+      const gives = m.user_a_id === userId ? m.b_gives_to_a : m.a_gives_to_b;
+      const gets = m.user_a_id === userId ? m.a_gives_to_b : m.b_gives_to_a;
+      
+      const givesList = gives?.map(sid => {
+        const s = stickerNames[sid];
+        return s ? `${s.code} ${s.name}` : '';
+      }).filter(Boolean) || [];
+      
+      const getsList = gets?.map(sid => {
+        const s = stickerNames[sid];
+        return s ? `${s.code} ${s.name}` : '';
+      }).filter(Boolean) || [];
+      
+      let msg = `🧠 ¡Einstein encontró un intercambio! **${userName}** tiene figuritas que coinciden contigo.\n\n`;
+      if (givesList.length) msg += `📤 Darías: ${givesList.join(', ')}\n`;
+      if (getsList.length) msg += `📥 Recibirías: ${getsList.join(', ')}\n`;
+      msg += `\nDi "cambiar?" para ver todos tus intercambios.`;
+      
+      notifications.push({
+        chatId: otherUser[0][1],
+        message: msg
+      });
+    }
+  }
+  
+  return { replySuffix, notifications };
+}
+
 async function showMatches(db, userId) {
   const userRows = query(db, `SELECT name FROM users WHERE id=?`, [userId]);
   const userName = userRows[0]?.[0] || 'Tú';
@@ -170,7 +235,6 @@ async function showMatches(db, userId) {
   
   let response = `🧠 **Einstein encontró ${myDirect.length + myCycles.length} oportunidades:**\n`;
   
-  // Get sticker names
   const stickerNames = {};
   const allStickers = query(db, 'SELECT id, code, name, team_name FROM stickers');
   for (const [id, code, stickerName, team] of allStickers) {
@@ -228,7 +292,6 @@ async function showProgress(db, userId) {
   response += `✅ ${owned} pegadas | 📦 ${dupes} repetidas | 🔍 ${needed} faltantes\n`;
   response += `📈 ${pct}% del álbum completo (${owned}/980)\n`;
   
-  // Team progress
   const teams = query(db, `
     SELECT s.team_name, s.group_name,
            COUNT(CASE WHEN i.status IN ('owned','duplicate') THEN 1 END) as have,

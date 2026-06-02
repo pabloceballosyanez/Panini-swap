@@ -482,10 +482,23 @@ app.post('/api/telegram/webhook', async (req, res) => {
     if (!cleanText) return; // empty after stripping mention
     
     console.log(`📩 Telegram [${name}]: ${cleanText}`);
-    const reply = await handleMessage(String(chatId), name, 'telegram', cleanText);
+    const result = await handleMessage(String(chatId), name, 'telegram', cleanText);
     
-    if (reply) {
-      await sendTelegramMessage(chatId, reply);
+    // Send reply to the user
+    if (result?.reply) {
+      await sendTelegramMessage(chatId, result.reply);
+    }
+    
+    // Send auto-match notifications to counterparties
+    if (result?.notifications?.length > 0) {
+      for (const notif of result.notifications) {
+        try {
+          await sendTelegramMessage(notif.chatId, notif.message);
+          console.log(`🔔 Notified ${notif.chatId}`);
+        } catch (e) {
+          console.error(`Failed to notify ${notif.chatId}:`, e.message);
+        }
+      }
     }
   } catch (err) {
     console.error('Webhook handler error:', err);
